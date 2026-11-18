@@ -11,7 +11,7 @@ class OrderItemIn(BaseModel):
         max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
     )
-    quantity: int = Field(ge=1, le=5)
+    quantity: StrictInt = Field(ge=1, le=5)
 
     @field_validator("quantity", mode="before")
     @classmethod
