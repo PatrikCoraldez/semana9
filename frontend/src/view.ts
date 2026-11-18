@@ -9,7 +9,7 @@ import {
 import { el, icon } from './dom';
 import { formatDateTime, formatMoney } from './format';
 import { productImage } from './shell';
-import type { CartLine, Catalog, NotificationStatus, Order, Product } from './types';
+import type { CartLine, Catalog, InvoiceInfo, NotificationStatus, Order, Product } from './types';
 
 export type CatalogState = 'loading' | 'ready' | 'error';
 export type PollState = 'idle' | 'polling' | 'timeout' | 'error';
@@ -479,10 +479,65 @@ function stockNote(
   };
 }
 
+/** S11: recuadro del comprobante interno emitido por el microservicio de facturación. */
+export function invoiceNode(invoice: InvoiceInfo | null, checking: boolean): HTMLElement {
+  const status = invoice?.billing_status ?? 'pending';
+  const tone = status === 'issued' ? 'sent' : status === 'failed' ? 'failed' : 'pending';
+  const label =
+    status === 'issued'
+      ? 'Comprobante emitido'
+      : status === 'failed'
+        ? 'Facturación pendiente de reintento'
+        : status === 'not_requested'
+          ? 'Sin comprobante'
+          : 'Comprobante en proceso';
+  const detail =
+    status === 'issued'
+      ? 'Comprobante interno de demostración generado por el servicio de facturación.'
+      : status === 'failed'
+        ? 'El servicio de facturación no respondió. El pedido sigue confirmado; la facturación se reintentará.'
+        : status === 'not_requested'
+          ? 'Este pedido no tiene facturación asociada.'
+          : 'El pedido está confirmado; el comprobante se está generando.';
+
+  const wrapper = el('div', {
+    class: `notice notice-${tone}`,
+    role: 'status',
+    'aria-live': 'polite',
+    'data-receipt-invoice': ''
+  });
+  wrapper.append(
+    el(
+      'div',
+      { class: 'notice-head' },
+      el('span', { class: `status-dot status-dot-${tone}`, 'aria-hidden': 'true' }),
+      el('p', { class: 'notice-title' }, label)
+    ),
+    el('p', { class: 'notice-text' }, detail)
+  );
+  if (status === 'issued' && invoice?.invoice_number) {
+    wrapper.append(el('p', { class: 'notice-meta invoice-number' }, `N.º ${invoice.invoice_number}`));
+  } else if (status === 'pending' && checking) {
+    wrapper.append(
+      el(
+        'p',
+        { class: 'notice-meta' },
+        el('span', { class: 'spinner', 'aria-hidden': 'true' }),
+        'Consultando el comprobante…'
+      )
+    );
+  } else if (status === 'pending' || status === 'failed') {
+    wrapper.append(actionButton('invoice-again', 'Consultar comprobante', 'refresh'));
+  }
+  return wrapper;
+}
+
 export function receiptPanelNodes(
   order: Order | null,
   pollState: PollState,
-  pollMessage: string
+  pollMessage: string,
+  invoice: InvoiceInfo | null = null,
+  invoiceChecking = false
 ): Node[] {
   if (!order) {
     const wrapper = el('div', { class: 'panel-message' });
@@ -578,6 +633,7 @@ export function receiptPanelNodes(
     banner,
     idBlock,
     notification,
+    invoiceNode(invoice, invoiceChecking),
     el('h3', { class: 'section-label' }, 'Productos'),
     items,
     total,

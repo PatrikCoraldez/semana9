@@ -1,6 +1,8 @@
 import type {
+  BillingStatus,
   Catalog,
   Campaign,
+  InvoiceInfo,
   NotificationStatus,
   Order,
   OrderLine,
@@ -286,6 +288,26 @@ export async function createOrder(
 export async function fetchOrder(id: string, signal?: AbortSignal): Promise<Order> {
   const response = await request(`/api/v1/orders/${encodeURIComponent(id)}`, { signal });
   return parseOrder(response.payload);
+}
+
+const billingStatuses: readonly BillingStatus[] = ['pending', 'issued', 'failed', 'not_requested'];
+
+function readNullableString(value: Record<string, unknown>, key: string): string | null {
+  const raw = value[key];
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+export async function fetchInvoice(id: string, signal?: AbortSignal): Promise<InvoiceInfo> {
+  const response = await request(`/api/v1/orders/${encodeURIComponent(id)}/invoice`, { signal });
+  const value = response.payload;
+  if (!isRecord(value) || !billingStatuses.includes(value.billing_status as BillingStatus)) {
+    throw invalidResponse();
+  }
+  return {
+    billing_status: value.billing_status as BillingStatus,
+    invoice_id: readNullableString(value, 'invoice_id'),
+    invoice_number: readNullableString(value, 'invoice_number')
+  };
 }
 
 export function friendlyError(error: unknown, context: 'catalog' | 'create' | 'order'): FriendlyError {

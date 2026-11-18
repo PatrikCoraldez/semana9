@@ -22,6 +22,15 @@ export interface Catalog {
 
 export type NotificationStatus = 'pending' | 'sent' | 'failed';
 
+/** S11: estado local de facturación (independiente de la notificación). */
+export type BillingStatus = 'pending' | 'issued' | 'failed' | 'not_requested';
+
+export interface InvoiceInfo {
+  billing_status: BillingStatus;
+  invoice_id: string | null;
+  invoice_number: string | null;
+}
+
 export interface OrderLine {
   product_id: string;
   name: string;
