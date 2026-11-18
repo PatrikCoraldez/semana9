@@ -10,10 +10,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .auth import AuthUser, optional_user
 from .billing import billing_view
 from .db import CAMPAIGN, PUBLIC_DATASET, utcnow
 from .events import build_order_created_event, iso8601
-from .models import BillingTask, Order, OrderItem, Outbox, Product
+from .models import BillingTask, Order, OrderItem, OrderOwner, Outbox, Product
 from .schemas import OrderCreate
 from .security import (
     ApiError,
@@ -48,6 +49,7 @@ async def _create_or_replay(
     idempotency_key: str,
     request_hash: str,
     payload: OrderCreate,
+    owner_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     lock_key = _advisory_lock_key(dataset_id, idempotency_key)
     async with session.begin():
@@ -183,6 +185,10 @@ async def _create_or_replay(
 
         # S11: tarea local de facturación con el snapshot ya persistido. La llamada HTTP al
         # microservicio la hace el worker después; nunca dentro de esta transacción de stock.
+        if dataset_id == PUBLIC_DATASET and owner_id is not None:
+            # Login opcional: asocia el pedido al cliente para "Mis pedidos".
+            session.add(OrderOwner(order_id=order_id, user_id=owner_id, created_at=created_at))
+
         if dataset_id == PUBLIC_DATASET:
             session.add(
                 BillingTask(
@@ -240,6 +246,7 @@ async def create_order(
     session: AsyncSession = Depends(get_session),
     context: DatasetContext = Depends(dataset_context),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: AuthUser | None = Depends(optional_user),
 ) -> JSONResponse:
     key = validate_idempotency_key(idempotency_key)
     request_hash = _canonical_request_hash(payload)
@@ -249,6 +256,7 @@ async def create_order(
         key,
         request_hash,
         payload,
+        user.id if user else None,
     )
     return JSONResponse(
         status_code=201,

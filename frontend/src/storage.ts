@@ -1,5 +1,5 @@
 import { sanitizeLines } from './cart';
-import type { CartLine } from './types';
+import type { AuthSession, CartLine } from './types';
 
 const cartKey = 'flash-sale:cart:v1';
 const attemptKey = 'flash-sale:attempt:v1';
@@ -97,6 +97,40 @@ export function saveAttempt(record: AttemptRecord): void {
 export function clearAttempt(): void {
   memoryAttempt = null;
   removeKey(storageFor('session'), attemptKey);
+}
+
+const sessionKey = 'flash-sale:session:v1';
+let memorySession: AuthSession | null = null;
+
+export function readStoredSession(): AuthSession | null {
+  const parsed = readJson(storageFor('local'), sessionKey) ?? memorySession;
+  if (
+    isRecord(parsed) &&
+    typeof parsed.access_token === 'string' &&
+    typeof parsed.refresh_token === 'string' &&
+    typeof parsed.expires_at === 'number' &&
+    isRecord(parsed.user) &&
+    typeof parsed.user.id === 'string' &&
+    typeof parsed.user.email === 'string'
+  ) {
+    return {
+      access_token: parsed.access_token,
+      refresh_token: parsed.refresh_token,
+      expires_at: parsed.expires_at,
+      user: { id: parsed.user.id, email: parsed.user.email }
+    };
+  }
+  return null;
+}
+
+export function writeStoredSession(session: AuthSession): void {
+  memorySession = session;
+  writeJson(storageFor('local'), sessionKey, session);
+}
+
+export function clearStoredSession(): void {
+  memorySession = null;
+  removeKey(storageFor('local'), sessionKey);
 }
 
 export function newIdempotencyKey(): string {

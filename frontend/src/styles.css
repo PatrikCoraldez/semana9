@@ -1898,12 +1898,26 @@ svg {
   }
 
   .nav-link {
-    padding-inline: 8px;
-    font-size: 0.9rem;
+    padding-inline: 6px;
+    font-size: 0.88rem;
+  }
+
+  .primary-nav {
+    gap: 0;
   }
 
   .cart-button {
     padding-left: 12px;
+  }
+
+  /* Con "Ingresar" en el menú, el carrito muestra solo ícono y contador (aria-label conserva el texto). */
+  .cart-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .hero-actions {
@@ -1961,4 +1975,89 @@ svg {
   .panel[open] .panel-shell {
     animation: none;
   }
+}
+
+/* ---- Login de clientes y "Mis pedidos" ---- */
+.auth-form .field-input {
+  margin-bottom: 12px;
+}
+
+.auth-toggle {
+  margin-top: 12px;
+}
+
+.account-head {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--ice);
+  margin-bottom: 18px;
+}
+
+.account-head .field-label {
+  margin: 0 0 2px;
+}
+
+.account-email {
+  margin: 0;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.my-orders {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.my-order {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.my-order:hover {
+  border-color: var(--line-strong);
+  background: var(--paper);
+}
+
+.my-order:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.my-order-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.my-order-date {
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.my-order-meta {
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+}
+
+.my-order-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
 }

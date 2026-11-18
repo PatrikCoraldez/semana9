@@ -3,11 +3,18 @@ import './styles.css';
 import {
   ApiError,
   createOrder,
+  fetchAuthEnabled,
   fetchCatalog,
   fetchInvoice,
+  fetchMyOrders,
   fetchOrder,
+  friendlyAuthError,
   friendlyError,
-  isAbortError
+  isAbortError,
+  refreshAuthSession,
+  signIn,
+  signOut,
+  signUp
 } from './api';
 import {
   MAX_DISTINCT_PRODUCTS,
@@ -27,15 +34,19 @@ import { buildShell, productImage } from './shell';
 import type { Elements } from './shell';
 import {
   clearAttempt,
+  clearStoredSession,
   newIdempotencyKey,
   readAttempt,
   readStoredCart,
+  readStoredSession,
   saveAttempt,
+  writeStoredSession,
   writeStoredCart
 } from './storage';
 import type { AttemptRecord } from './storage';
-import type { CartLine, Catalog, InvoiceInfo, Order, Product } from './types';
+import type { AuthSession, CartLine, Catalog, InvoiceInfo, MyOrderSummary, Order, Product } from './types';
 import {
+  accountPanelNodes,
   applyStockChip,
   cartPanelNodes,
   configureAddButton,
@@ -50,7 +61,7 @@ import {
 } from './view';
 import type { CatalogState, PollState } from './view';
 
-type PanelMode = 'cart' | 'receipt' | 'track';
+type PanelMode = 'cart' | 'receipt' | 'track' | 'account';
 type ToastTone = 'info' | 'warn';
 
 const pollIntervalMs = 2000;
@@ -86,6 +97,17 @@ let invoiceChecking = false;
 let invoiceTimer: number | null = null;
 let invoiceAbort: AbortController | null = null;
 let invoiceToken = 0;
+// Login de clientes (Supabase Auth vía backend) y "Mis pedidos".
+let authSession: AuthSession | null = readStoredSession();
+let authEnabled: boolean | null = null;
+let accountMode: 'login' | 'signup' = 'login';
+let accountEmail = '';
+let accountBusy = false;
+let accountError = '';
+let accountInfo = '';
+let myOrders: MyOrderSummary[] | null = null;
+let myOrdersError = '';
+let myOrdersAbort: AbortController | null = null;
 let lastFocused: HTMLElement | null = null;
 let toastTimer: number | null = null;
 
@@ -103,6 +125,7 @@ function start(): void {
   });
   ui.cartButton.addEventListener('click', () => openPanel('cart'));
   ui.trackButton.addEventListener('click', () => openPanel('track'));
+  ui.accountButton.addEventListener('click', () => openAccount());
   ui.panelClose.addEventListener('click', () => ui.panel.close());
   ui.panel.addEventListener('cancel', onPanelCancel);
   ui.panel.addEventListener('close', onPanelClose);
@@ -112,8 +135,172 @@ function start(): void {
   ui.panelBody.addEventListener('input', onPanelInput);
 
   updateCartCount(false);
+  updateAccountButton();
   renderCatalogSkeletons();
   void loadCatalog();
+  fetchAuthEnabled()
+    .then((enabled) => {
+      authEnabled = enabled;
+    })
+    .catch(() => {
+      authEnabled = null;
+    });
+}
+
+// ---- Login de clientes y "Mis pedidos" ----
+
+function updateAccountButton(): void {
+  const label = authSession ? 'Mi cuenta' : 'Ingresar';
+  ui.accountButton.textContent = label;
+  ui.accountButton.setAttribute(
+    'aria-label',
+    authSession ? `Mi cuenta (${authSession.user.email})` : 'Ingresar o crear cuenta'
+  );
+}
+
+function openAccount(): void {
+  accountError = '';
+  accountInfo = '';
+  openPanel('account');
+  if (authSession) {
+    void loadMyOrders();
+  }
+}
+
+/** Token vigente para enviar al backend; renueva si está por vencer. */
+async function getAccessToken(): Promise<string | null> {
+  if (!authSession) {
+    return null;
+  }
+  const secondsLeft = authSession.expires_at - Date.now() / 1000;
+  if (secondsLeft > 60) {
+    return authSession.access_token;
+  }
+  try {
+    setSession(await refreshAuthSession(authSession.refresh_token));
+    return authSession ? authSession.access_token : null;
+  } catch {
+    setSession(null);
+    return null;
+  }
+}
+
+function setSession(session: AuthSession | null): void {
+  authSession = session;
+  if (session) {
+    writeStoredSession(session);
+  } else {
+    clearStoredSession();
+    myOrders = null;
+  }
+  updateAccountButton();
+}
+
+async function submitAuth(): Promise<void> {
+  if (accountBusy) {
+    return;
+  }
+  const emailInput = ui.panelBody.querySelector<HTMLInputElement>('#auth-email');
+  const passwordInput = ui.panelBody.querySelector<HTMLInputElement>('#auth-password');
+  const email = (emailInput?.value ?? '').trim();
+  const password = passwordInput?.value ?? '';
+  accountEmail = email;
+  if (!email.includes('@') || password.length < 6) {
+    accountError = 'Escribe un correo válido y una contraseña de al menos 6 caracteres.';
+    renderPanel(false);
+    ui.panelBody.querySelector<HTMLElement>('[data-auth-error]')?.focus();
+    return;
+  }
+  accountBusy = true;
+  accountError = '';
+  accountInfo = '';
+  renderPanel(false);
+  try {
+    if (accountMode === 'signup') {
+      const session = await signUp(email, password);
+      if (!session) {
+        accountBusy = false;
+        accountMode = 'login';
+        accountInfo = `Te enviamos un correo a ${email}. Confírmalo y luego inicia sesión aquí.`;
+        renderPanel(false);
+        return;
+      }
+      setSession(session);
+    } else {
+      setSession(await signIn(email, password));
+    }
+    accountBusy = false;
+    renderPanel(true);
+    showToast('Sesión iniciada. Tus compras se guardarán en "Mis pedidos".');
+    void loadMyOrders();
+  } catch (error) {
+    accountBusy = false;
+    accountError = friendlyAuthError(error);
+    renderPanel(false);
+    ui.panelBody.querySelector<HTMLElement>('[data-auth-error]')?.focus();
+  }
+}
+
+async function loadMyOrders(): Promise<void> {
+  myOrdersAbort?.abort();
+  const controller = new AbortController();
+  myOrdersAbort = controller;
+  myOrders = null;
+  myOrdersError = '';
+  if (panelMode === 'account' && ui.panel.open) {
+    renderPanel(false);
+  }
+  const token = await getAccessToken();
+  if (!token) {
+    accountInfo = '';
+    accountError = 'Tu sesión expiró. Vuelve a iniciar sesión.';
+    if (panelMode === 'account' && ui.panel.open) {
+      renderPanel(false);
+    }
+    return;
+  }
+  try {
+    const orders = await fetchMyOrders(token, controller.signal);
+    if (controller.signal.aborted) {
+      return;
+    }
+    myOrders = orders;
+  } catch (error) {
+    if (isAbortError(error) || controller.signal.aborted) {
+      return;
+    }
+    if (error instanceof ApiError && error.code === 'UNAUTHORIZED') {
+      setSession(null);
+      accountError = 'Tu sesión expiró. Vuelve a iniciar sesión.';
+    } else {
+      myOrders = [];
+      myOrdersError = 'No pudimos cargar tus pedidos. Inténtalo de nuevo.';
+    }
+  }
+  myOrdersAbort = null;
+  if (panelMode === 'account' && ui.panel.open) {
+    renderPanel(false);
+  }
+}
+
+async function logout(): Promise<void> {
+  const token = authSession?.access_token;
+  setSession(null);
+  accountMode = 'login';
+  accountError = '';
+  accountInfo = 'Cerraste sesión.';
+  renderPanel(true);
+  if (token) {
+    await signOut(token);
+  }
+}
+
+async function openMyOrder(orderId: string): Promise<void> {
+  try {
+    beginReceipt(await fetchOrder(orderId));
+  } catch (error) {
+    showToast(friendlyError(error, 'order').message, 'warn');
+  }
 }
 
 async function loadCatalog(options: { silent?: boolean } = {}): Promise<void> {
@@ -603,6 +790,13 @@ function setPanelMode(mode: PanelMode): void {
 
 function focusPanelStart(mode: PanelMode): void {
   window.requestAnimationFrame(() => {
+    if (mode === 'account') {
+      const input = ui.panelBody.querySelector<HTMLInputElement>('#auth-email');
+      if (input) {
+        input.focus();
+        return;
+      }
+    }
     if (mode === 'track') {
       const input = ui.panelBody.querySelector<HTMLInputElement>('#order-lookup');
       if (input) {
@@ -650,6 +844,11 @@ function onPanelInput(event: Event): void {
 }
 
 function onPanelSubmit(event: SubmitEvent): void {
+  if (event.target instanceof HTMLFormElement && event.target.matches('[data-auth-form]')) {
+    event.preventDefault();
+    void submitAuth();
+    return;
+  }
   if (!(event.target instanceof HTMLFormElement) || !event.target.matches('[data-lookup-form]')) {
     return;
   }
@@ -704,6 +903,24 @@ function onPanelBodyClick(event: MouseEvent): void {
     case 'invoice-again':
       startInvoicePolling();
       break;
+    case 'auth-toggle':
+      accountMode = accountMode === 'login' ? 'signup' : 'login';
+      accountError = '';
+      accountInfo = '';
+      renderPanel(false);
+      focusPanelStart('account');
+      break;
+    case 'logout':
+      void logout();
+      break;
+    case 'reload-orders':
+      void loadMyOrders();
+      break;
+    case 'open-order':
+      if (button.dataset.orderId) {
+        void openMyOrder(button.dataset.orderId);
+      }
+      break;
     case 'open-track':
       setPanelMode('track');
       break;
@@ -726,12 +943,14 @@ function renderPanel(resetScroll: boolean): void {
   const titles: Record<PanelMode, string> = {
     cart: 'Carrito',
     receipt: 'Pedido confirmado',
-    track: 'Seguimiento'
+    track: 'Seguimiento',
+    account: authSession ? 'Mi cuenta' : 'Ingresar'
   };
   const closeLabels: Record<PanelMode, string> = {
     cart: 'Cerrar carrito',
     receipt: 'Cerrar recibo',
-    track: 'Cerrar seguimiento'
+    track: 'Cerrar seguimiento',
+    account: 'Cerrar cuenta'
   };
   ui.panelTitle.textContent = titles[panelMode];
   ui.panelClose.setAttribute('aria-label', closeLabels[panelMode]);
@@ -759,6 +978,18 @@ function renderPanelBody(resetScroll: boolean): void {
     });
   } else if (panelMode === 'receipt') {
     nodes = receiptPanelNodes(activeOrder, pollState, pollMessage, activeInvoice, invoiceChecking);
+  } else if (panelMode === 'account') {
+    nodes = accountPanelNodes({
+      enabled: authEnabled,
+      session: authSession,
+      mode: accountMode,
+      email: accountEmail,
+      busy: accountBusy,
+      error: accountError,
+      info: accountInfo,
+      orders: myOrders,
+      ordersError: myOrdersError
+    });
   } else {
     nodes = trackPanelNodes(trackingValue, trackingError, trackingBusy);
   }
@@ -871,7 +1102,8 @@ async function confirmOrder(): Promise<void> {
   });
 
   try {
-    const order = await createOrder(items, attempt.key);
+    // Login opcional: con sesión, el pedido queda en "Mis pedidos"; sin sesión, compra como invitado.
+    const order = await createOrder(items, attempt.key, undefined, await getAccessToken());
     clearAttempt();
     creating = false;
     cart = [];

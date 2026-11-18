@@ -9,7 +9,16 @@ import {
 import { el, icon } from './dom';
 import { formatDateTime, formatMoney } from './format';
 import { productImage } from './shell';
-import type { CartLine, Catalog, InvoiceInfo, NotificationStatus, Order, Product } from './types';
+import type {
+  AuthSession,
+  CartLine,
+  Catalog,
+  InvoiceInfo,
+  MyOrderSummary,
+  NotificationStatus,
+  Order,
+  Product
+} from './types';
 
 export type CatalogState = 'loading' | 'ready' | 'error';
 export type PollState = 'idle' | 'polling' | 'timeout' | 'error';
@@ -477,6 +486,185 @@ function stockNote(
     text: `${product.stock} disponibles · el stock se descuenta al confirmar.`,
     tone: 'is-available'
   };
+}
+
+export interface AccountViewState {
+  enabled: boolean | null; // null = consultando
+  session: AuthSession | null;
+  mode: 'login' | 'signup';
+  email: string;
+  busy: boolean;
+  error: string;
+  info: string;
+  orders: MyOrderSummary[] | null; // null = cargando
+  ordersError: string;
+}
+
+function billingLabel(order: MyOrderSummary): { text: string; tone: 'sent' | 'pending' | 'failed' } {
+  if (order.billing_status === 'issued') {
+    return { text: 'Comprobante emitido', tone: 'sent' };
+  }
+  if (order.billing_status === 'failed') {
+    return { text: 'Facturación pendiente de reintento', tone: 'failed' };
+  }
+  if (order.billing_status === 'not_requested') {
+    return { text: 'Sin comprobante', tone: 'pending' };
+  }
+  return { text: 'Comprobante en proceso', tone: 'pending' };
+}
+
+export function accountPanelNodes(state: AccountViewState): Node[] {
+  if (state.enabled === false) {
+    const wrapper = el('div', { class: 'panel-message' });
+    wrapper.append(
+      el('span', { class: 'panel-message-icon' }, icon('alert')),
+      el('h3', {}, 'Inicio de sesión no disponible'),
+      el('p', {}, 'Esta tienda no tiene configurado Supabase Auth. Puedes comprar como invitado.')
+    );
+    return [wrapper];
+  }
+
+  if (!state.session) {
+    const isSignup = state.mode === 'signup';
+    const email = el('input', {
+      id: 'auth-email',
+      class: 'field-input',
+      type: 'email',
+      name: 'email',
+      autocomplete: 'email',
+      required: true,
+      maxlength: '254',
+      placeholder: 'tu@correo.com'
+    });
+    email.value = state.email;
+    const password = el('input', {
+      id: 'auth-password',
+      class: 'field-input',
+      type: 'password',
+      name: 'password',
+      autocomplete: isSignup ? 'new-password' : 'current-password',
+      required: true,
+      minlength: '6',
+      maxlength: '72'
+    });
+    const submit = el('button', {
+      type: 'submit',
+      class: 'button button-primary button-full',
+      'data-auth-submit': ''
+    });
+    submit.disabled = state.busy;
+    submit.append(
+      icon('arrow'),
+      el('span', {}, state.busy ? 'Procesando…' : isSignup ? 'Crear cuenta' : 'Ingresar')
+    );
+    const errorBox = el('p', {
+      class: 'field-error',
+      role: 'alert',
+      tabindex: '-1',
+      'data-auth-error': '',
+      hidden: state.error.length === 0
+    });
+    errorBox.textContent = state.error;
+    const form = el(
+      'form',
+      { class: 'track-form auth-form', 'data-auth-form': '', novalidate: true },
+      el('label', { for: 'auth-email', class: 'field-label' }, 'Correo'),
+      email,
+      el('label', { for: 'auth-password', class: 'field-label' }, 'Contraseña'),
+      password,
+      el('p', { class: 'field-hint' }, isSignup ? 'Mínimo 6 caracteres.' : 'Usa la cuenta que registraste en esta tienda.'),
+      errorBox,
+      submit
+    );
+    if (state.busy) {
+      form.setAttribute('aria-busy', 'true');
+    }
+    const nodes: Node[] = [
+      el('h3', { class: 'section-label' }, isSignup ? 'Crear cuenta' : 'Iniciar sesión'),
+      el(
+        'p',
+        { class: 'panel-intro' },
+        'Con tu cuenta, tus compras quedan guardadas en "Mis pedidos" junto con su comprobante. También puedes comprar sin iniciar sesión.'
+      )
+    ];
+    if (state.info) {
+      const info = el('div', { class: 'notice notice-sent', role: 'status' });
+      info.append(el('p', { class: 'notice-text' }, state.info));
+      nodes.push(info);
+    }
+    nodes.push(
+      form,
+      actionButton(
+        'auth-toggle',
+        isSignup ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate',
+        'arrow',
+        'button button-secondary button-full auth-toggle'
+      )
+    );
+    return nodes;
+  }
+
+  const header = el(
+    'div',
+    { class: 'account-head' },
+    el('p', { class: 'field-label' }, 'Sesión iniciada como'),
+    el('p', { class: 'account-email' }, state.session.user.email)
+  );
+
+  const list = el('ul', { class: 'my-orders' });
+  if (state.orders === null) {
+    list.append(
+      el('li', { class: 'notice-meta' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Cargando tus pedidos…')
+    );
+  } else if (state.ordersError) {
+    list.append(el('li', { class: 'field-error' }, state.ordersError));
+  } else if (state.orders.length === 0) {
+    list.append(
+      el('li', { class: 'panel-intro' }, 'Aún no tienes pedidos con esta cuenta. Compra con la sesión iniciada y aparecerán aquí.')
+    );
+  } else {
+    for (const order of state.orders) {
+      const billing = billingLabel(order);
+      const button = el('button', {
+        type: 'button',
+        class: 'my-order',
+        'data-action': 'open-order',
+        'data-order-id': order.id
+      });
+      button.append(
+        el(
+          'span',
+          { class: 'my-order-main' },
+          el('span', { class: 'my-order-date' }, formatDateTime(order.created_at)),
+          el('strong', { class: 'my-order-total' }, formatMoney(order.total_cents))
+        ),
+        el(
+          'span',
+          { class: 'my-order-meta' },
+          `${order.units} ${order.units === 1 ? 'unidad' : 'unidades'} · Pedido ${order.id.slice(0, 8)}`
+        ),
+        el(
+          'span',
+          { class: 'my-order-status' },
+          el('span', { class: `status-dot status-dot-${billing.tone}`, 'aria-hidden': 'true' }),
+          order.invoice_number ? `${billing.text} · ${order.invoice_number}` : billing.text
+        )
+      );
+      list.append(el('li', {}, button));
+    }
+  }
+
+  return [
+    header,
+    el('h3', { class: 'section-label' }, 'Mis pedidos'),
+    list,
+    el(
+      'div',
+      { class: 'receipt-actions' },
+      actionButton('reload-orders', 'Actualizar', 'refresh'),
+      actionButton('logout', 'Cerrar sesión', 'close')
+    )
+  ];
 }
 
 /** S11: recuadro del comprobante interno emitido por el microservicio de facturación. */

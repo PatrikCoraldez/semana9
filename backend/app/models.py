@@ -139,6 +139,22 @@ class BillingTask(Base):
     __table_args__ = (Index("ix_billing_tasks_status", "status", "created_at"),)
 
 
+class OrderOwner(Base):
+    """Cliente (usuario de Supabase Auth) que hizo el pedido. Opcional: se puede comprar sin login."""
+
+    __tablename__ = "order_owners"
+
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (Index("ix_order_owners_user", "user_id", "created_at"),)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 

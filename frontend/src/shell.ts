@@ -17,6 +17,7 @@ export interface Elements {
   cartButton: HTMLButtonElement;
   cartCount: HTMLElement;
   trackButton: HTMLButtonElement;
+  accountButton: HTMLButtonElement;
   panel: HTMLDialogElement;
   panelTitle: HTMLElement;
   panelClose: HTMLButtonElement;
@@ -61,6 +62,12 @@ export function buildShell(): Elements {
     'Seguimiento'
   );
 
+  const accountButton = el(
+    'button',
+    { type: 'button', class: 'nav-link account-button', 'aria-haspopup': 'dialog' },
+    'Ingresar'
+  );
+
   const header = el(
     'header',
     { class: 'site-header' },
@@ -78,6 +85,7 @@ export function buildShell(): Elements {
         { class: 'primary-nav', 'aria-label': 'Principal' },
         el('a', { class: 'nav-link', href: '#catalogo' }, 'Tienda'),
         trackButton,
+        accountButton,
         cartButton
       )
     )
@@ -276,6 +284,7 @@ export function buildShell(): Elements {
     cartButton,
     cartCount,
     trackButton,
+    accountButton,
     panel,
     panelTitle,
     panelClose,

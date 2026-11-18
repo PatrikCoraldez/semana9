@@ -1,8 +1,10 @@
 import type {
+  AuthSession,
   BillingStatus,
   Catalog,
   Campaign,
   InvoiceInfo,
+  MyOrderSummary,
   NotificationStatus,
   Order,
   OrderLine,
@@ -266,12 +268,17 @@ export async function fetchCatalog(signal?: AbortSignal): Promise<Catalog> {
 export async function createOrder(
   items: Array<{ product_id: string; quantity: number }>,
   idempotencyKey: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  accessToken?: string | null
 ): Promise<Order> {
+  const headers: Record<string, string> = { 'Idempotency-Key': idempotencyKey };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
   const response = await request('/api/v1/orders', {
     method: 'POST',
     body: { items },
-    headers: { 'Idempotency-Key': idempotencyKey },
+    headers,
     signal
   });
   if (response.status !== 201) {
@@ -288,6 +295,132 @@ export async function createOrder(
 export async function fetchOrder(id: string, signal?: AbortSignal): Promise<Order> {
   const response = await request(`/api/v1/orders/${encodeURIComponent(id)}`, { signal });
   return parseOrder(response.payload);
+}
+
+// ---- Login de clientes (Supabase Auth a través del backend S09) ----
+
+function parseSession(value: unknown): AuthSession {
+  if (
+    !isRecord(value) ||
+    typeof value.access_token !== 'string' ||
+    typeof value.refresh_token !== 'string' ||
+    typeof value.expires_at !== 'number' ||
+    !isRecord(value.user) ||
+    typeof value.user.id !== 'string' ||
+    typeof value.user.email !== 'string'
+  ) {
+    throw invalidResponse();
+  }
+  return {
+    access_token: value.access_token,
+    refresh_token: value.refresh_token,
+    expires_at: value.expires_at,
+    user: { id: value.user.id, email: value.user.email }
+  };
+}
+
+export async function fetchAuthEnabled(signal?: AbortSignal): Promise<boolean> {
+  const response = await request('/api/v1/auth/status', { signal });
+  return isRecord(response.payload) && response.payload.enabled === true;
+}
+
+export async function signIn(email: string, password: string): Promise<AuthSession> {
+  const response = await request('/api/v1/auth/login', {
+    method: 'POST',
+    body: { email, password }
+  });
+  return parseSession(response.payload);
+}
+
+/** Devuelve la sesión, o null si Supabase exige confirmar el correo primero. */
+export async function signUp(email: string, password: string): Promise<AuthSession | null> {
+  const response = await request('/api/v1/auth/signup', {
+    method: 'POST',
+    body: { email, password }
+  });
+  if (response.status === 202) {
+    return null;
+  }
+  return parseSession(response.payload);
+}
+
+export async function refreshAuthSession(refreshToken: string): Promise<AuthSession> {
+  const response = await request('/api/v1/auth/refresh', {
+    method: 'POST',
+    body: { refresh_token: refreshToken }
+  });
+  return parseSession(response.payload);
+}
+
+export async function signOut(accessToken: string): Promise<void> {
+  try {
+    await fetch('/api/v1/auth/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      credentials: 'same-origin',
+      mode: 'same-origin',
+      cache: 'no-store'
+    });
+  } catch {
+    // Se cierra la sesión localmente aunque la red falle.
+  }
+}
+
+export async function fetchMyOrders(accessToken: string, signal?: AbortSignal): Promise<MyOrderSummary[]> {
+  const response = await request('/api/v1/me/orders', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal
+  });
+  const value = response.payload;
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    throw invalidResponse();
+  }
+  return value.items.map((item: unknown): MyOrderSummary => {
+    if (
+      !isRecord(item) ||
+      !isNotificationStatus(item.notification_status) ||
+      !billingStatuses.includes(item.billing_status as BillingStatus)
+    ) {
+      throw invalidResponse();
+    }
+    return {
+      id: readString(item, 'id'),
+      created_at: readString(item, 'created_at'),
+      total_cents: readInteger(item, 'total_cents', 0),
+      units: readInteger(item, 'units', 0),
+      notification_status: item.notification_status,
+      billing_status: item.billing_status as BillingStatus,
+      invoice_number: readNullableString(item, 'invoice_number')
+    };
+  });
+}
+
+export function friendlyAuthError(error: unknown): string {
+  const code = error instanceof ApiError ? error.code : 'UNKNOWN';
+  switch (code) {
+    case 'INVALID_CREDENTIALS':
+      return 'Correo o contraseña incorrectos.';
+    case 'EMAIL_NOT_CONFIRMED':
+      return 'Primero confirma tu correo con el enlace que te envió Supabase.';
+    case 'EMAIL_ALREADY_REGISTERED':
+      return 'Ese correo ya está registrado. Inicia sesión.';
+    case 'WEAK_PASSWORD':
+      return 'La contraseña es muy débil. Usa al menos 6 caracteres.';
+    case 'VALIDATION_ERROR':
+      return 'Revisa el correo y usa una contraseña de 6 a 72 caracteres.';
+    case 'AUTH_RATE_LIMITED':
+    case 'RATE_LIMITED':
+      return 'Demasiados intentos. Espera un momento e inténtalo de nuevo.';
+    case 'AUTH_NOT_CONFIGURED':
+      return 'El inicio de sesión no está configurado en esta tienda.';
+    case 'UNAUTHORIZED':
+      return 'Tu sesión expiró. Vuelve a iniciar sesión.';
+    case 'NETWORK_ERROR':
+    case 'NETWORK_TIMEOUT':
+      return 'No pudimos conectar con el servidor. Inténtalo de nuevo.';
+    default:
+      return 'No se pudo completar el inicio de sesión. Inténtalo de nuevo.';
+  }
 }
 
 const billingStatuses: readonly BillingStatus[] = ['pending', 'issued', 'failed', 'not_requested'];

@@ -25,6 +25,24 @@ export type NotificationStatus = 'pending' | 'sent' | 'failed';
 /** S11: estado local de facturación (independiente de la notificación). */
 export type BillingStatus = 'pending' | 'issued' | 'failed' | 'not_requested';
 
+/** Sesión de cliente (Supabase Auth vía el backend S09). */
+export interface AuthSession {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // segundos Unix
+  user: { id: string; email: string };
+}
+
+export interface MyOrderSummary {
+  id: string;
+  created_at: string;
+  total_cents: number;
+  units: number;
+  notification_status: NotificationStatus;
+  billing_status: BillingStatus;
+  invoice_number: string | null;
+}
+
 export interface InvoiceInfo {
   billing_status: BillingStatus;
   invoice_id: string | null;
