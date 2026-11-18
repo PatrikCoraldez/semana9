@@ -5,6 +5,7 @@ import logging
 
 from redis.asyncio import Redis
 
+from .billing import create_http_client, process_billing_batch, release_stuck_tasks
 from .config import Settings, get_settings
 from .db import Database
 from .events import (
@@ -106,6 +107,21 @@ async def consumer_loop(database: Database, client: Redis, settings: Settings) -
             await asyncio.sleep(1.0)
 
 
+async def billing_loop(database: Database, settings: Settings) -> None:
+    if not settings.billing_configured():
+        logger.warning("billing not configured: BILLING_BASE_URL/BILLING_TOKEN vacíos; tareas quedan pending")
+    await release_stuck_tasks(database.session_factory)
+    async with create_http_client(settings) as http_client:
+        while True:
+            try:
+                await process_billing_batch(database.session_factory, settings, http_client)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("billing error type=%s", type(exc).__name__)
+            await asyncio.sleep(settings.billing_poll_seconds)
+
+
 async def cleanup_loop(database: Database, settings: Settings) -> None:
     while True:
         try:
@@ -151,6 +167,7 @@ async def run_worker() -> None:
             relay_loop(database, client, settings),
             consumer_loop(database, client, settings),
             cleanup_loop(database, settings),
+            billing_loop(database, settings),
         )
     finally:
         await client.aclose()

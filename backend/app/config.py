@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     run_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
     max_active_runs: int = Field(default=20, ge=1, le=1000)
 
+    # Facturación S11 (microservicio externo). Vacío = facturación no configurada.
+    billing_base_url: str = ""
+    billing_token: SecretStr = SecretStr("")
+    billing_timeout_seconds: float = Field(default=15.0, ge=1.0, le=60.0)
+    billing_poll_seconds: float = Field(default=2.0, ge=0.2, le=60.0)
+
     startup_max_attempts: int = Field(default=60, ge=1, le=600)
     startup_retry_seconds: float = Field(default=1.0, ge=0.05, le=30.0)
     db_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
@@ -80,8 +86,19 @@ class Settings(BaseSettings):
             raise ValueError("INSTANCE_ID must not be empty")
         return value
 
+    @field_validator("billing_base_url")
+    @classmethod
+    def validate_billing_base_url(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        if value and not value.startswith("https://"):
+            raise ValueError("BILLING_BASE_URL must use https://")
+        return value
+
     def lab_key_value(self) -> str:
         return self.lab_key.get_secret_value()
+
+    def billing_configured(self) -> bool:
+        return bool(self.billing_base_url and self.billing_token.get_secret_value().strip())
 
 
 @lru_cache(maxsize=1)

@@ -10,9 +10,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db import CAMPAIGN, utcnow
+from .billing import billing_view
+from .db import CAMPAIGN, PUBLIC_DATASET, utcnow
 from .events import build_order_created_event, iso8601
-from .models import Order, OrderItem, Outbox, Product
+from .models import BillingTask, Order, OrderItem, Outbox, Product
 from .schemas import OrderCreate
 from .security import (
     ApiError,
@@ -178,6 +179,21 @@ async def _create_or_replay(
             )
         )
 
+        await session.flush()  # el pedido debe existir antes de su tarea (clave foránea)
+
+        # S11: tarea local de facturación con el snapshot ya persistido. La llamada HTTP al
+        # microservicio la hace el worker después; nunca dentro de esta transacción de stock.
+        if dataset_id == PUBLIC_DATASET:
+            session.add(
+                BillingTask(
+                    order_id=order_id,
+                    dataset_id=dataset_id,
+                    status="pending",
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+
         await session.flush()
         return snapshot
 
@@ -260,3 +276,24 @@ async def get_order(
     snapshot = dict(order.snapshot)
     snapshot["notification_status"] = order.notification_status
     return JSONResponse(content=snapshot)
+
+
+@router.get("/api/v1/orders/{order_id}/invoice")
+async def get_order_invoice(
+    order_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    context: DatasetContext = Depends(dataset_context),
+) -> JSONResponse:
+    """S11: estado local de facturación. Ruta nueva; no altera el JSON público del pedido."""
+    try:
+        identifier = uuid.UUID(order_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ApiError(404, "NOT_FOUND", "Order not found") from None
+
+    order = await session.get(Order, identifier)
+    if order is None or order.dataset_id != context.dataset_id:
+        raise ApiError(404, "NOT_FOUND", "Order not found")
+
+    task = await session.get(BillingTask, identifier)
+    return JSONResponse(content={"order_id": str(identifier), **billing_view(task)})
