@@ -3,6 +3,7 @@ import type {
   BillingStatus,
   Catalog,
   Campaign,
+  InvoiceDetail,
   InvoiceInfo,
   MyOrderSummary,
   NotificationStatus,
@@ -439,8 +440,26 @@ export async function fetchInvoice(id: string, signal?: AbortSignal): Promise<In
   return {
     billing_status: value.billing_status as BillingStatus,
     invoice_id: readNullableString(value, 'invoice_id'),
-    invoice_number: readNullableString(value, 'invoice_number')
+    invoice_number: readNullableString(value, 'invoice_number'),
+    invoice: parseInvoiceDetail(value.invoice)
   };
+}
+
+function parseInvoiceDetail(value: unknown): InvoiceDetail | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    return null;
+  }
+  try {
+    return {
+      number: readString(value, 'number'),
+      currency: readString(value, 'currency'),
+      created_at: readString(value, 'created_at'),
+      items: value.items.map(parseOrderLine),
+      total_cents: readInteger(value, 'total_cents', 0)
+    };
+  } catch {
+    return null; // sin detalle: se muestra solo el número
+  }
 }
 
 export function friendlyError(error: unknown, context: 'catalog' | 'create' | 'order'): FriendlyError {

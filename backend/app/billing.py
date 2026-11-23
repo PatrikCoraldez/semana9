@@ -43,7 +43,33 @@ class BillingOutcome:
     status: str  # "issued" | "failed" | "transient"
     invoice_id: uuid.UUID | None = None
     invoice_number: str | None = None
+    invoice: dict[str, Any] | None = None
     error: str | None = None
+
+
+def _invoice_snapshot(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Datos del comprobante que se muestran al cliente (sin issuer_id ni datos internos)."""
+    try:
+        items = [
+            {
+                "product_id": str(item["product_id"]),
+                "name": str(item["name"])[:200],
+                "quantity": int(item["quantity"]),
+                "unit_price_cents": int(item["unit_price_cents"]),
+            }
+            for item in body["items"]
+        ]
+        return {
+            "id": str(uuid.UUID(str(body["id"]))),
+            "number": str(body["number"])[:80],
+            "status": str(body["status"]),
+            "currency": str(body["currency"]),
+            "created_at": str(body["created_at"]),
+            "items": items,
+            "total_cents": int(body["total_cents"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def build_invoice_request(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -89,7 +115,12 @@ def _interpret(response: httpx.Response, request_body: dict[str, Any]) -> Billin
             return BillingOutcome("failed", error=f"HTTP {status} INVALID_RESPONSE")
         if not (same_order and same_total and issued and isinstance(number, str)):
             return BillingOutcome("failed", error=f"HTTP {status} RESPONSE_MISMATCH")
-        return BillingOutcome("issued", invoice_id=invoice_id, invoice_number=number[:80])
+        return BillingOutcome(
+            "issued",
+            invoice_id=invoice_id,
+            invoice_number=number[:80],
+            invoice=_invoice_snapshot(body),
+        )
     code = _error_code(response)
     if status == 429 or status >= 500:
         return BillingOutcome("transient", error=f"HTTP {status} {code}")
@@ -184,6 +215,7 @@ async def _finish(
     if outcome.status == "issued":
         values["invoice_id"] = outcome.invoice_id
         values["invoice_number"] = outcome.invoice_number
+        values["invoice"] = outcome.invoice
     async with session_factory() as session:
         async with session.begin():
             await session.execute(
@@ -215,6 +247,49 @@ async def process_billing_batch(
             outcome.error or "-",
         )
     return len(claimed)
+
+
+async def backfill_invoice_details(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    client: httpx.AsyncClient,
+) -> int:
+    """Facturas emitidas antes de guardar el detalle: lo recupera con GET /invoices/{id}."""
+    if not settings.billing_configured():
+        return 0
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(BillingTask.order_id, BillingTask.invoice_id)
+                .where(
+                    BillingTask.status == "issued",
+                    BillingTask.invoice.is_(None),
+                    BillingTask.invoice_id.is_not(None),
+                )
+                .limit(BATCH_SIZE)
+            )
+        ).all()
+    updated = 0
+    for order_id, invoice_id in rows:
+        try:
+            response = await client.get(
+                f"{settings.billing_base_url}/invoices/{invoice_id}",
+                headers={"X-Billing-Token": settings.billing_token.get_secret_value().strip()},
+            )
+        except httpx.HTTPError:
+            return updated  # proveedor no disponible: se intenta en otra vuelta
+        snapshot = _invoice_snapshot(response.json()) if response.status_code == 200 else None
+        if snapshot is None:
+            continue
+        async with session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    update(BillingTask)
+                    .where(BillingTask.order_id == order_id)
+                    .values(invoice=snapshot)
+                )
+        updated += 1
+    return updated
 
 
 async def release_stuck_tasks(session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -275,6 +350,7 @@ def billing_view(task: BillingTask | None) -> dict[str, Any]:
         "billing_status": status,
         "invoice_id": str(task.invoice_id) if task.invoice_id else None,
         "invoice_number": task.invoice_number,
+        "invoice": task.invoice if status == "issued" else None,
         "attempts": task.attempts,
         "last_error": task.last_error if status == "failed" else None,
     }

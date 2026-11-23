@@ -139,6 +139,10 @@ class Database:
 
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            # create_all no agrega columnas a tablas existentes: migración mínima idempotente.
+            await connection.execute(
+                text("ALTER TABLE billing_tasks ADD COLUMN IF NOT EXISTS invoice JSONB")
+            )
 
     async def seed_public_catalog(self) -> None:
         from .models import Product

@@ -688,23 +688,95 @@ export function invoiceNode(invoice: InvoiceInfo | null, checking: boolean): HTM
           ? 'Este pedido no tiene facturación asociada.'
           : 'El pedido está confirmado; el comprobante se está generando.';
 
-  const wrapper = el('div', {
-    class: `notice notice-${tone}`,
+  const badge =
+    status === 'issued'
+      ? 'Emitido'
+      : status === 'failed'
+        ? 'Reintento'
+        : status === 'not_requested'
+          ? 'Sin factura'
+          : 'En proceso';
+
+  const wrapper = el('section', {
+    class: `invoice-card invoice-card-${tone}`,
     role: 'status',
     'aria-live': 'polite',
+    'aria-label': 'Comprobante interno',
     'data-receipt-invoice': ''
   });
   wrapper.append(
     el(
       'div',
-      { class: 'notice-head' },
-      el('span', { class: `status-dot status-dot-${tone}`, 'aria-hidden': 'true' }),
-      el('p', { class: 'notice-title' }, label)
-    ),
-    el('p', { class: 'notice-text' }, detail)
+      { class: 'invoice-card-head' },
+      el('p', { class: 'invoice-eyebrow' }, 'Comprobante interno'),
+      el('span', { class: `invoice-badge invoice-badge-${tone}` }, badge)
+    )
   );
-  if (status === 'issued' && invoice?.invoice_number) {
-    wrapper.append(el('p', { class: 'notice-meta invoice-number' }, `N.º ${invoice.invoice_number}`));
+
+  const issued = status === 'issued' ? invoice?.invoice ?? null : null;
+  if (status === 'issued') {
+    wrapper.append(
+      el('h3', { class: 'invoice-title' }, 'Factura emitida'),
+      el('p', { class: 'invoice-number' }, issued?.number ?? invoice?.invoice_number ?? '')
+    );
+  } else {
+    wrapper.append(el('h3', { class: 'invoice-title' }, label), el('p', { class: 'invoice-text' }, detail));
+  }
+
+  if (issued) {
+    wrapper.append(
+      el(
+        'dl',
+        { class: 'invoice-facts' },
+        el(
+          'div',
+          {},
+          el('dt', {}, 'Fecha de emisión'),
+          el('dd', {}, formatDateTime(issued.created_at))
+        ),
+        el('div', {}, el('dt', {}, 'Moneda'), el('dd', {}, issued.currency))
+      ),
+      el('h4', { class: 'invoice-section' }, 'Detalle')
+    );
+    const lines = el('ul', { class: 'invoice-lines' });
+    for (const line of issued.items) {
+      lines.append(
+        el(
+          'li',
+          { class: 'invoice-line' },
+          el(
+            'div',
+            {},
+            el('span', { class: 'invoice-line-name' }, line.name),
+            el(
+              'span',
+              { class: 'invoice-line-meta' },
+              `${line.quantity} × ${formatMoney(line.unit_price_cents)}`
+            )
+          ),
+          el('span', { class: 'invoice-line-total' }, formatMoney(line.quantity * line.unit_price_cents))
+        )
+      );
+    }
+    wrapper.append(
+      lines,
+      el(
+        'div',
+        { class: 'invoice-total' },
+        el('span', {}, 'Total facturado'),
+        el('strong', {}, formatMoney(issued.total_cents))
+      )
+    );
+  }
+
+  if (status === 'issued') {
+    wrapper.append(
+      el(
+        'p',
+        { class: 'invoice-disclaimer' },
+        'Documento interno de demostración. No es un comprobante electrónico SUNAT ni acredita un pago.'
+      )
+    );
   } else if (status === 'pending' && checking) {
     wrapper.append(
       el(

@@ -132,6 +132,8 @@ class BillingTask(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     invoice_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Copia del comprobante devuelto por facturación (fecha, moneda, detalle y total).
+    invoice: Mapped[dict | None] = mapped_column(JSON_VALUE, nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

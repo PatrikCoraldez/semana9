@@ -5,7 +5,12 @@ import logging
 
 from redis.asyncio import Redis
 
-from .billing import create_http_client, process_billing_batch, release_stuck_tasks
+from .billing import (
+    backfill_invoice_details,
+    create_http_client,
+    process_billing_batch,
+    release_stuck_tasks,
+)
 from .config import Settings, get_settings
 from .db import Database
 from .events import (
@@ -115,6 +120,7 @@ async def billing_loop(database: Database, settings: Settings) -> None:
         while True:
             try:
                 await process_billing_batch(database.session_factory, settings, http_client)
+                await backfill_invoice_details(database.session_factory, settings, http_client)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

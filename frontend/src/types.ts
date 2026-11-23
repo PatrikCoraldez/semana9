@@ -43,10 +43,19 @@ export interface MyOrderSummary {
   invoice_number: string | null;
 }
 
+export interface InvoiceDetail {
+  number: string;
+  currency: string;
+  created_at: string;
+  items: OrderLine[];
+  total_cents: number;
+}
+
 export interface InvoiceInfo {
   billing_status: BillingStatus;
   invoice_id: string | null;
   invoice_number: string | null;
+  invoice: InvoiceDetail | null;
 }
 
 export interface OrderLine {
